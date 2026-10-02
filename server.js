@@ -70,67 +70,55 @@ app.get("/api/products/:id", async (req, res) => {
 // ADD PRODUCT
 // CREATE ORDER
 // CREATE ORDER
-app.post("/api/orders", async (req, res) => {
-    const client = await pool.connect();
-
+// ADD PRODUCT
+app.post("/api/products", async (req, res) => {
     try {
         const {
-            customer_name,
-            phone,
-            address,
-            items
+            name,
+            description,
+            price,
+            image,
+            category,
+            stock
         } = req.body;
 
-        // Check required information
-        if (!customer_name || !phone || !items || !Array.isArray(items) || items.length === 0) {
+        if (!name || price === undefined) {
             return res.status(400).json({
-                message: "Customer name, phone and order items are required"
+                message: "Product name and price are required"
             });
         }
 
-        await client.query("BEGIN");
+        const result = await pool.query(
+            `
+            INSERT INTO products
+            (name, description, price, image, category, stock)
+            VALUES ($1, $2, $3, $4, $5, $6)
+            RETURNING *
+            `,
+            [
+                name,
+                description || "",
+                Number(price),
+                image || "",
+                category || "Other",
+                Number(stock) || 0
+            ]
+        );
 
-        let total = 0;
+        res.status(201).json({
+            message: "Product added successfully",
+            product: result.rows[0]
+        });
 
-        const orderItems = [];
+    } catch (error) {
+        console.error("ADD PRODUCT ERROR:", error);
 
-        // Check products and calculate total from database
-        for (const item of items) {
-
-            const productResult = await client.query(
-                "SELECT * FROM products WHERE id = $1",
-                [item.product_id]
-            );
-
-            if (productResult.rows.length === 0) {
-                throw new Error(`Product ${item.product_id} not found`);
-            }
-
-            const product = productResult.rows[0];
-
-            const quantity = Number(item.quantity);
-
-            if (!Number.isInteger(quantity) || quantity <= 0) {
-                throw new Error("Invalid product quantity");
-            }
-
-            if (quantity > product.stock) {
-                throw new Error(
-                    `${product.name} does not have enough stock`
-                );
-            }
-
-            const price = Number(product.price);
-
-            total += price * quantity;
-
-            orderItems.push({
-                product_id: product.id,
-                product_name: product.name,
-                price: price,
-                quantity: quantity
-            });
-        }
+        res.status(500).json({
+            message: "Failed to add product",
+            error: error.message
+        });
+    }
+});
 
         // Create order
         const orderResult = await client.query(
