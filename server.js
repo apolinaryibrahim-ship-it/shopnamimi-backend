@@ -90,6 +90,7 @@ app.get("/api/products/:id", async (req, res) => {
 
 // ADD PRODUCT
 // CREATE ORDER
+// CREATE ORDER
 app.post("/api/orders", async (req, res) => {
     const client = await pool.connect();
 
