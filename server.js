@@ -24,85 +24,180 @@ app.get("/", (req, res) => {
 // GET ALL PRODUCTS
 // CREATE ORDERS TABLES
 // GET ALL PRODUCTS
-app.get("/api/products", async (req, res) => {
+// CREATE ORDER
+app.post("/api/orders", async (req, res) => {
+    const client = await pool.connect();
+
     try {
-        const result = await pool.query(
-            "SELECT * FROM products ORDER BY id DESC"
-        );
+        // Make sure order tables exist
+        await client.query(`
+            CREATE TABLE IF NOT EXISTS orders (
+                id SERIAL PRIMARY KEY,
+                customer_name TEXT NOT NULL,
+                phone TEXT NOT NULL,
+                address TEXT DEFAULT '',
+                total NUMERIC(12,2) NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        `);
 
-        res.json(result.rows);
+        await client.query(`
+            CREATE TABLE IF NOT EXISTS order_items (
+                id SERIAL PRIMARY KEY,
+                order_id INTEGER NOT NULL REFERENCES orders(id) ON DELETE CASCADE,
+                product_id INTEGER NOT NULL,
+                product_name TEXT NOT NULL,
+                price NUMERIC(12,2) NOT NULL,
+                quantity INTEGER NOT NULL
+            )
+        `);
 
-    } catch (error) {
-        console.error("GET PRODUCTS ERROR:", error);
+        const {
+            customer_name,
+            phone,
+            address,
+            items
+        } = req.body;
 
-        res.status(500).json({
-            message: "Failed to get products",
-            error: error.message
-        });
-    }
-});
-
-
-// GET ONE PRODUCT
-app.get("/api/products/:id", async (req, res) => {
-    try {
-        const result = await pool.query(
-            "SELECT * FROM products WHERE id = $1",
-            [req.params.id]
-        );
-
-        if (result.rows.length === 0) {
-            return res.status(404).json({
-                message: "Product not found"
+        // Validate customer information
+        if (!customer_name || !phone) {
+            return res.status(400).json({
+                message: "Customer name and phone are required"
             });
         }
 
-        res.json(result.rows[0]);
+        // Validate items
+        if (!Array.isArray(items) || items.length === 0) {
+            return res.status(400).json({
+                message: "Your cart is empty"
+            });
+        }
 
-    } catch (error) {
-        console.error("GET PRODUCT ERROR:", error);
+        await client.query("BEGIN");
 
-        res.status(500).json({
-            message: "Failed to get product",
-            error: error.message
-        });
-    }
-});
+        let total = 0;
+        const orderItems = [];
 
-// ADD PRODUCT
-app.post("/api/products", async (req, res) => {
-    try {
-        const {
-            name,
-            description,
-            price,
-            image,
-            category,
-            stock
-        } = req.body;
+        // Check every product
+        for (const item of items) {
 
-        const result = await pool.query(
-            `INSERT INTO products
-            (name, description, price, image, category, stock)
-            VALUES ($1, $2, $3, $4, $5, $6)
-            RETURNING *`,
+            const productId = Number(item.product_id);
+            const quantity = Number(item.quantity);
+
+            if (!Number.isInteger(productId) || productId <= 0) {
+                throw new Error(
+                    `Invalid product ID: ${item.product_id}`
+                );
+            }
+
+            if (!Number.isInteger(quantity) || quantity <= 0) {
+                throw new Error("Invalid product quantity");
+            }
+
+            const productResult = await client.query(
+                "SELECT * FROM products WHERE id = $1",
+                [productId]
+            );
+
+            if (productResult.rows.length === 0) {
+                throw new Error(
+                    `Product ${productId} not found`
+                );
+            }
+
+            const product = productResult.rows[0];
+
+            const stock = Number(product.stock);
+            const price = Number(product.price);
+
+            if (quantity > stock) {
+                throw new Error(
+                    `${product.name} does not have enough stock`
+                );
+            }
+
+            total += price * quantity;
+
+            orderItems.push({
+                product_id: product.id,
+                product_name: product.name,
+                price: price,
+                quantity: quantity
+            });
+        }
+
+        // Create order
+        const orderResult = await client.query(
+            `
+            INSERT INTO orders
+            (customer_name, phone, address, total)
+            VALUES ($1, $2, $3, $4)
+            RETURNING *
+            `,
             [
-                name,
-                description,
-                price,
-                image,
-                category,
-                stock
+                customer_name,
+                phone,
+                address || "",
+                total
             ]
         );
 
-        res.status(201).json(result.rows[0]);
+        const order = orderResult.rows[0];
+
+        // Save order items and reduce stock
+        for (const item of orderItems) {
+
+            await client.query(
+                `
+                INSERT INTO order_items
+                (order_id, product_id, product_name, price, quantity)
+                VALUES ($1, $2, $3, $4, $5)
+                `,
+                [
+                    order.id,
+                    item.product_id,
+                    item.product_name,
+                    item.price,
+                    item.quantity
+                ]
+            );
+
+            await client.query(
+                `
+                UPDATE products
+                SET stock = stock - $1
+                WHERE id = $2
+                `,
+                [
+                    item.quantity,
+                    item.product_id
+                ]
+            );
+        }
+
+        await client.query("COMMIT");
+
+        return res.status(201).json({
+            success: true,
+            message: "Order created successfully!",
+            order: order,
+            items: orderItems
+        });
+
     } catch (error) {
-        console.error(error);
-        res.status(500).json({
-            message: "Failed to add product",
+
+        await client.query("ROLLBACK");
+
+        console.error("ORDER ERROR:", error);
+
+        return res.status(500).json({
+            success: false,
+            message: "Failed to create order",
             error: error.message
         });
+
+    } finally {
+        client.release();
     }
 });
 // Test database
