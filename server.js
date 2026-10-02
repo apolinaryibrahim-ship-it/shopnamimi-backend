@@ -23,25 +23,46 @@ app.get("/", (req, res) => {
 });
 // GET ALL PRODUCTS
 // CREATE ORDERS TABLES
-app.get("/api/products", async (req, res) => {
+app.get("/api/setup-orders", async (req, res) => {
     try {
-        const result = await pool.query(
-            "SELECT * FROM products ORDER BY id DESC"
-        );
 
-        res.json(result.rows);
+        await pool.query(`
+            CREATE TABLE IF NOT EXISTS orders (
+                id SERIAL PRIMARY KEY,
+                customer_name VARCHAR(255) NOT NULL,
+                phone VARCHAR(50) NOT NULL,
+                address TEXT,
+                total NUMERIC(12,2) NOT NULL,
+                status VARCHAR(50) DEFAULT 'Pending',
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+        `);
+
+        await pool.query(`
+            CREATE TABLE IF NOT EXISTS order_items (
+                id SERIAL PRIMARY KEY,
+                order_id INTEGER REFERENCES orders(id) ON DELETE CASCADE,
+                product_id INTEGER,
+                product_name VARCHAR(255) NOT NULL,
+                price NUMERIC(12,2) NOT NULL,
+                quantity INTEGER NOT NULL
+            );
+        `);
+
+        res.json({
+            message: "Orders tables created successfully!"
+        });
 
     } catch (error) {
 
         console.error(error);
 
         res.status(500).json({
-            message: "Failed to get products",
+            message: "Failed to create orders tables",
             error: error.message
         });
     }
 });
-
 
 // GET ONE PRODUCT
 app.get("/api/products/:id", async (req, res) => {
@@ -68,9 +89,6 @@ app.get("/api/products/:id", async (req, res) => {
 });
 
 // ADD PRODUCT
-// CREATE ORDER
-// CREATE ORDER
-// ADD PRODUCT
 app.post("/api/products", async (req, res) => {
     try {
         const {
@@ -82,116 +100,28 @@ app.post("/api/products", async (req, res) => {
             stock
         } = req.body;
 
-        if (!name || price === undefined) {
-            return res.status(400).json({
-                message: "Product name and price are required"
-            });
-        }
-
         const result = await pool.query(
-            `
-            INSERT INTO products
+            `INSERT INTO products
             (name, description, price, image, category, stock)
             VALUES ($1, $2, $3, $4, $5, $6)
-            RETURNING *
-            `,
+            RETURNING *`,
             [
                 name,
-                description || "",
-                Number(price),
-                image || "",
-                category || "Other",
-                Number(stock) || 0
+                description,
+                price,
+                image,
+                category,
+                stock
             ]
         );
 
-        res.status(201).json({
-            message: "Product added successfully",
-            product: result.rows[0]
-        });
-
+        res.status(201).json(result.rows[0]);
     } catch (error) {
-        console.error("ADD PRODUCT ERROR:", error);
-
+        console.error(error);
         res.status(500).json({
             message: "Failed to add product",
             error: error.message
         });
-    }
-});
-
-        // Create order
-        const orderResult = await client.query(
-            `
-            INSERT INTO orders
-            (customer_name, phone, address, total)
-            VALUES ($1, $2, $3, $4)
-            RETURNING *
-            `,
-            [
-                customer_name,
-                phone,
-                address || "",
-                total
-            ]
-        );
-
-        const order = orderResult.rows[0];
-
-        // Save order items and reduce stock
-        for (const item of orderItems) {
-
-            await client.query(
-                `
-                INSERT INTO order_items
-                (order_id, product_id, product_name, price, quantity)
-                VALUES ($1, $2, $3, $4, $5)
-                `,
-                [
-                    order.id,
-                    item.product_id,
-                    item.product_name,
-                    item.price,
-                    item.quantity
-                ]
-            );
-
-            await client.query(
-                `
-                UPDATE products
-                SET stock = stock - $1
-                WHERE id = $2
-                `,
-                [
-                    item.quantity,
-                    item.product_id
-                ]
-            );
-        }
-
-        await client.query("COMMIT");
-
-        res.status(201).json({
-            message: "Order created successfully!",
-            order: order,
-            items: orderItems
-        });
-
-    } catch (error) {
-
-        await client.query("ROLLBACK");
-
-        console.error(error);
-
-        res.status(500).json({
-            message: "Failed to create order",
-            error: error.message
-        });
-
-    } finally {
-
-        client.release();
-
     }
 });
 // Test database
