@@ -41,33 +41,6 @@ app.get("/api/test-db", async (req, res) => {
     }
 });
 
-app.get("/api/setup-products", async (req, res) => {
-    try {
-        await pool.query(`
-            CREATE TABLE IF NOT EXISTS products (
-                id SERIAL PRIMARY KEY,
-                name VARCHAR(255) NOT NULL,
-                description TEXT,
-                price NUMERIC(12,2) NOT NULL,
-                image TEXT,
-                category VARCHAR(100),
-                stock INTEGER DEFAULT 0,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            );
-        `);
-
-        res.json({
-            message: "Products table created successfully!"
-        });
-    } catch (error) {
-        console.error(error);
-
-        res.status(500).json({
-            message: "Failed to create products table",
-            error: error.message
-        });
-    }
-});
 
 const PORT = process.env.PORT || 5000;
 
