@@ -88,39 +88,141 @@ app.get("/api/products/:id", async (req, res) => {
 });
 
 // ADD PRODUCT
-app.post("/api/products", async (req, res) => {
+// CREATE ORDER
+app.post("/api/orders", async (req, res) => {
+    const client = await pool.connect();
+
     try {
         const {
-            name,
-            description,
-            price,
-            image,
-            category,
-            stock
+            customer_name,
+            phone,
+            address,
+            items
         } = req.body;
 
-        const result = await pool.query(
-            `INSERT INTO products
-            (name, description, price, image, category, stock)
-            VALUES ($1, $2, $3, $4, $5, $6)
-            RETURNING *`,
+        // Check required information
+        if (!customer_name || !phone || !items || !Array.isArray(items) || items.length === 0) {
+            return res.status(400).json({
+                message: "Customer name, phone and order items are required"
+            });
+        }
+
+        await client.query("BEGIN");
+
+        let total = 0;
+
+        const orderItems = [];
+
+        // Check products and calculate total from database
+        for (const item of items) {
+
+            const productResult = await client.query(
+                "SELECT * FROM products WHERE id = $1",
+                [item.product_id]
+            );
+
+            if (productResult.rows.length === 0) {
+                throw new Error(`Product ${item.product_id} not found`);
+            }
+
+            const product = productResult.rows[0];
+
+            const quantity = Number(item.quantity);
+
+            if (!Number.isInteger(quantity) || quantity <= 0) {
+                throw new Error("Invalid product quantity");
+            }
+
+            if (quantity > product.stock) {
+                throw new Error(
+                    `${product.name} does not have enough stock`
+                );
+            }
+
+            const price = Number(product.price);
+
+            total += price * quantity;
+
+            orderItems.push({
+                product_id: product.id,
+                product_name: product.name,
+                price: price,
+                quantity: quantity
+            });
+        }
+
+        // Create order
+        const orderResult = await client.query(
+            `
+            INSERT INTO orders
+            (customer_name, phone, address, total)
+            VALUES ($1, $2, $3, $4)
+            RETURNING *
+            `,
             [
-                name,
-                description,
-                price,
-                image,
-                category,
-                stock
+                customer_name,
+                phone,
+                address || "",
+                total
             ]
         );
 
-        res.status(201).json(result.rows[0]);
+        const order = orderResult.rows[0];
+
+        // Save order items and reduce stock
+        for (const item of orderItems) {
+
+            await client.query(
+                `
+                INSERT INTO order_items
+                (order_id, product_id, product_name, price, quantity)
+                VALUES ($1, $2, $3, $4, $5)
+                `,
+                [
+                    order.id,
+                    item.product_id,
+                    item.product_name,
+                    item.price,
+                    item.quantity
+                ]
+            );
+
+            await client.query(
+                `
+                UPDATE products
+                SET stock = stock - $1
+                WHERE id = $2
+                `,
+                [
+                    item.quantity,
+                    item.product_id
+                ]
+            );
+        }
+
+        await client.query("COMMIT");
+
+        res.status(201).json({
+            message: "Order created successfully!",
+            order: order,
+            items: orderItems
+        });
+
     } catch (error) {
+
+        await client.query("ROLLBACK");
+
         console.error(error);
+
         res.status(500).json({
-            message: "Failed to add product",
+            message: "Failed to create order",
             error: error.message
         });
+
+    } finally {
+
+        client.release();
+
     }
 });
 // Test database
