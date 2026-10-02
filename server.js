@@ -63,6 +63,7 @@ app.get("/api/setup-orders", async (req, res) => {
         });
     }
 });
+
 // GET ONE PRODUCT
 app.get("/api/products/:id", async (req, res) => {
     try {
